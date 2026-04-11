@@ -1,0 +1,134 @@
+Platform Migration Protocol 
+
+
+
+Good instinct to define the protocol before touching code. A migration without a protocol is just chaos with good intentions.
+
+---
+
+**Re-Parameterization Protocol v1.0**
+
+---
+
+**Phase 0 — Freeze & Archive**
+
+Before any changes: tag the current notebook as `signal_engine_v2_6_FINAL.ipynb` and commit to GitHub. This is the reference artifact. Nothing in it gets modified again. All future work is on new files.
+
+Deliverables: archived notebook, tagged GitHub commit, this protocol document saved to the repo.
+
+---
+
+**Phase 1 — Structural Decomposition**
+
+Break the monolithic notebook into four Python modules. No logic changes yet — pure extraction.
+
+`data.py` — all vendor API calls. yfinance, FRED, FMP, Massive, Schwab. Each vendor gets its own function. No signal construction here, only raw data retrieval and caching.
+
+`signals.py` — all signal construction functions. Takes raw data as input, returns a standardized DataFrame (index=dates, columns=tickers). No API calls, no configuration constants, no globals.
+
+`engine.py` — the 11-step combination pipeline. Takes a signals dict and a config object as input. Returns IC results, weights, mega-alpha. Completely stateless — same inputs always produce same outputs.
+
+`config.py` — single source of truth for all parameters. STUDY_LOG, thresholds, KEEP_SIGNALS, TICKER_SIGNAL_OVERRIDES. No logic, only data structures.
+
+Rule: no cell imports from another cell. Every module is independently importable and testable.
+
+---
+
+**Phase 2 — Purge**
+
+With the code extracted into modules, systematically remove everything that should not migrate.
+
+**Remove entirely:**
+- `PHOTONICS` alias — replaced by `UNIVERSE` everywhere
+- `Bollinger_Pct_B` — from signals.py, from any hardcoded KEPT_SIGNALS lists, from regime IC cell
+- All hardcoded KEPT_SIGNALS lists that differ from the config.py version — there must be exactly one
+- `TICKER_SIGNAL_OVERRIDES` entries for universes not yet validated — photonics overrides stay, semis overrides stay, everything else clears
+- OVERRIDE_NOTES for cleared overrides
+- The dual closing brace issue in the signals dict
+- All `v2.x` comment archaeology — version history belongs in the changelog, not inline
+
+**Audit and decide:**
+- `Momentum_10d` — review vs Momentum_21d correlation on each universe before keeping
+- `VIX_Change_1d` — confirmed culled, verify it's not silently included anywhere
+- `EPS_Revision_Dir` and `EPS_Surprise` — FMP data quality not validated, flag as provisional
+
+**Standardize:**
+- Every signal function signature: `sig_name(close, volume, **kwargs) → pd.DataFrame`
+- Every data function signature: `fetch_name(tickers, start, end, **kwargs) → pd.DataFrame`
+- Every config constant: SCREAMING_SNAKE_CASE, typed, commented with units and source
+
+---
+
+**Phase 3 — Re-Parameterization**
+
+Replace all hardcoded magic numbers with named, documented, grid-searchable parameters.
+
+The current hardcoded values that need to become explicit parameters:
+
+| Parameter | Current Value | Type | Needs Grid Search |
+|---|---|---|---|
+| VIX_THRESHOLD | 20.0 | float | Yes |
+| TNX_THRESHOLD | 4.5 | float | Yes |
+| IC_MIN | 0.03 | float | Yes |
+| CORR_MAX | 0.70 | float | Yes |
+| CORR_GATE | 0.85 | float | No |
+| D_LOOKBACK | 21 | int | Yes |
+| SMA_WINDOW | 200 | int | No |
+| VWAP_SLOPE_WINDOW | 78 | int | Yes |
+| PC_RATIO_LOOKBACK | 252 | int | No |
+
+Each parameter in config.py gets a comment block: current value, valid range, optimization method, last validated date, validated on which universe.
+
+---
+
+**Phase 4 — New Universe Intake Protocol**
+
+Standardized checklist for adding any new study to STUDY_LOG. No universe runs until it passes all gates.
+
+Gate 1 — Correlation diagnostic. N_eff/N must be above 0.50 before any signal work. Below that, split the universe.
+
+Gate 2 — Business model audit. Every ticker gets one sentence: what drives its revenue, which layer of the value chain it occupies, what its primary demand driver is. Heterogeneous universes (sovereign-ai) get flagged and split before running.
+
+Gate 3 — Data availability check. Minimum 3 years of clean OHLCV. Tickers with gaps above 5% of trading days excluded.
+
+Gate 4 — Override initialization. TICKER_SIGNAL_OVERRIDES starts empty for every new universe. Overrides are populated only after regime-conditional IC results are reviewed. No assumptions carried from prior studies.
+
+Gate 5 — IR baseline. First run produces a baseline IR estimate. Document it. No subsequent run is valid without comparing against baseline.
+
+---
+
+**Phase 5 — New Signal Intake Protocol**
+
+Standardized requirements before any new signal enters KEEP_SIGNALS.
+
+Requirement 1 — IC evidence. Mean |IC| above IC_MIN threshold. Must be measured on at least two universes or one universe with n > 30 quarters.
+
+Requirement 2 — Independence check. Spearman correlation with every existing KEEP signal below CORR_MAX. If above threshold, document the redundancy and decide which signal to demote.
+
+Requirement 3 — Regime stability. IC must not flip sign across VIX and TNX regime splits without a documented economic mechanism explaining the flip.
+
+Requirement 4 — Data quality declaration. Source documented, refresh frequency documented, known staleness issues documented, fallback behavior documented.
+
+Requirement 5 — IR contribution estimate. Expected N_eff contribution calculated before adding. If projected IR improvement is below 0.01, signal goes to watch list not KEEP_SIGNALS.
+
+---
+
+**Phase 6 — Streamlit Migration**
+
+Only begins after Phases 1-5 are complete and the engine runs cleanly on at least two universes from the new module structure.
+
+`app.py` — Streamlit UI. Sidebar: universe selector, date range, regime threshold sliders. Three tabs: IC summary, mega-alpha chart, regime heatmap. Bottom panel: current regime badge, signal weights, run manifest.
+
+`app.py` imports only from `engine.py` and `config.py`. No direct data calls in the UI layer.
+
+---
+
+**Implementation Order**
+
+Run these phases sequentially. Do not start Phase 2 until Phase 1 is complete and importable. Do not start Phase 6 until Phase 5 passes on at least two universes.
+
+Phase 1 is the highest risk step — extraction without logic changes sounds simple but import chains and globals will break things. Plan for one full debugging session just for Phase 1.
+
+---
+
+Ready to start Phase 0 — archive and tag? Or do you want to add anything to the protocol first?
